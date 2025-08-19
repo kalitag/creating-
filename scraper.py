@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 from config import REQUEST_TIMEOUT, MAX_RETRIES
 from utils import clean_text, get_lowest_price
 from url_resolver import url_resolver
+from debug_framework import log_extraction_attempt, log_extraction_success, log_extraction_failure
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,6 @@ class ModernScraper:
             'DNT': '1'
         })
         
-        # Updated selectors for 2024/2025
         self.platform_selectors = {
             'amazon': {
                 'title': [
@@ -42,7 +42,12 @@ class ModernScraper:
                     'h1 span[data-automation-id="product-title"]',
                     '.product-title h1',
                     '[data-testid="product-title"]',
-                    'h1.a-size-large'
+                    'h1.a-size-large',
+                    'h1 span.a-size-large',
+                    '.a-size-large.product-title-word-break',
+                    'span.product-title-word-break',
+                    '#feature-bullets h1',
+                    '.a-section h1 span'
                 ],
                 'price': [
                     '.a-price.a-text-price.a-size-medium.a-color-base .a-offscreen',
@@ -53,7 +58,12 @@ class ModernScraper:
                     '#apex_desktop .a-price .a-offscreen',
                     '.a-price.a-text-price .a-offscreen',
                     '[data-testid="price"] .a-offscreen',
-                    '.a-price.a-text-normal .a-offscreen'
+                    '.a-price.a-text-normal .a-offscreen',
+                    '.a-price-current .a-offscreen',
+                    '.a-price.a-size-medium .a-offscreen',
+                    'span.a-price.a-text-price .a-offscreen',
+                    '.a-price-symbol',
+                    '.a-price-whole + .a-price-fraction'
                 ],
                 'brand': [
                     '#bylineInfo',
@@ -62,14 +72,20 @@ class ModernScraper:
                     '.po-brand .po-break-word',
                     'tr.a-spacing-small td.a-span9 span',
                     '[data-testid="brand-name"]',
-                    '.a-row .a-text-bold:contains("Brand")+span'
+                    '.a-row .a-text-bold:contains("Brand")+span',
+                    'table.a-normal tr td span.a-size-base',
+                    '#feature-bullets .a-list-item span:contains("Brand")',
+                    '.a-section .a-text-bold'
                 ],
                 'images': [
                     '#landingImage',
                     '.a-dynamic-image',
                     '#imgTagWrapperId img',
                     'img[data-old-hires]',
-                    '.a-spacing-small img[src*="amazon"]'
+                    '.a-spacing-small img[src*="amazon"]',
+                    '#main-image-container img',
+                    '.a-dynamic-image.a-stretch-horizontal',
+                    'img.a-dynamic-image'
                 ],
                 'availability': [
                     '#availability span',
@@ -77,7 +93,9 @@ class ModernScraper:
                     '.a-color-price',
                     '#outOfStock',
                     '.a-alert-content',
-                    '[data-testid="availability"]'
+                    '[data-testid="availability"]',
+                    '.a-color-success',
+                    '#availability .a-color-state'
                 ]
             },
             'flipkart': {
@@ -89,7 +107,11 @@ class ModernScraper:
                     '.B_NuCI',
                     'span._35KyD6',
                     'h1 span',
-                    '[data-testid="product-title"]'
+                    '[data-testid="product-title"]',
+                    'h1.yhZ71d',
+                    'span.yhZ71d',
+                    '.aMaAEs span',
+                    'h1._6EBuvT'
                 ],
                 'price': [
                     'div.Nx9bqj.CxhGGd',
@@ -99,13 +121,19 @@ class ModernScraper:
                     'div._25b18c div',
                     '._30jeq3',
                     'div._16Jk6d',
-                    '[data-testid="selling-price"]'
+                    '[data-testid="selling-price"]',
+                    '._1_WHN1._3O0U0u',
+                    'div._30jeq3._1_WHN1',
+                    '._25b18c ._16Jk6d',
+                    'div.Nx9bqj'
                 ],
                 'brand': [
                     '.G6XhBx',
                     '.aMaAEs',
                     'span.G6XhBx',
-                    '[data-testid="brand-name"]'
+                    '[data-testid="brand-name"]',
+                    '.aMaAEs span',
+                    'a.G6XhBx'
                 ],
                 'images': [
                     '._396cs4 img',
@@ -113,7 +141,9 @@ class ModernScraper:
                     '.CXW8mj img',
                     '._2KpZ6l._396cs4 img',
                     'img._396cs4',
-                    '[data-testid="product-image"] img'
+                    '[data-testid="product-image"] img',
+                    '._2r_T1I._396cs4 img',
+                    '.CXW8mj._396cs4 img'
                 ]
             },
             'meesho': {
@@ -123,7 +153,10 @@ class ModernScraper:
                     '.ProductDetail__productName',
                     'h1',
                     '.sc-bcXHqe',
-                    '[data-testid="pdp-product-name"]'
+                    '[data-testid="pdp-product-name"]',
+                    'h1.sc-htpNat',
+                    '.product-title h1',
+                    'h1.sc-gqjmRU'
                 ],
                 'price': [
                     'h4[data-testid="product-price"]',
@@ -131,17 +164,23 @@ class ModernScraper:
                     'h4.sc-htpNat',
                     '.price',
                     'h4',
-                    '[data-testid="selling-price"]'
+                    '[data-testid="selling-price"]',
+                    'h4.sc-gqjmRU',
+                    '.price-container h4',
+                    'span.sc-htpNat'
                 ],
                 'brand': [
                     '[data-testid="brand-name"]',
                     '.brand-name',
-                    '.ProductDetail__brand'
+                    '.ProductDetail__brand',
+                    '.brand-info span'
                 ],
                 'images': [
                     '[data-testid="product-image"] img',
                     '.ProductDetail__image img',
-                    '.product-image img'
+                    '.product-image img',
+                    '.image-container img',
+                    '.product-gallery img'
                 ]
             },
             'myntra': {
@@ -150,24 +189,33 @@ class ModernScraper:
                     '.pdp-product-name',
                     'h1[data-testid="product-name"]',
                     '.product-name',
-                    '.pdp-name'
+                    '.pdp-name',
+                    'h1.pdp-title',
+                    '.product-title h1',
+                    '.pdp-product-name h1'
                 ],
                 'price': [
                     '.pdp-price strong',
                     '.product-discountedPrice',
                     '.pdp-price',
                     '[data-testid="price"] strong',
-                    '.price-current'
+                    '.price-current',
+                    '.pdp-price .pdp-price-info',
+                    'span.pdp-price strong'
                 ],
                 'brand': [
                     '.pdp-title',
                     '[data-testid="brand-name"]',
-                    '.brand-name'
+                    '.brand-name',
+                    '.pdp-brand-name',
+                    'h1.pdp-title'
                 ],
                 'images': [
                     '.image-grid-image',
                     '.product-image img',
-                    '[data-testid="product-image"] img'
+                    '[data-testid="product-image"] img',
+                    '.pdp-image img',
+                    '.image-grid img'
                 ]
             },
             'ajio': {
@@ -175,22 +223,28 @@ class ModernScraper:
                     '.prod-name',
                     'h1.product-title',
                     '.product-name',
-                    '[data-testid="product-title"]'
+                    '[data-testid="product-title"]',
+                    'h1.prod-name',
+                    '.product-info h1'
                 ],
                 'price': [
                     '.prod-sp',
                     '.product-price',
                     '.price-current',
-                    '[data-testid="selling-price"]'
+                    '[data-testid="selling-price"]',
+                    '.price-info .prod-sp',
+                    'span.prod-sp'
                 ],
                 'brand': [
                     '.prod-brand',
                     '[data-testid="brand-name"]',
-                    '.brand-name'
+                    '.brand-name',
+                    '.brand-info .prod-brand'
                 ],
                 'images': [
                     '.prod-image img',
-                    '.product-image img'
+                    '.product-image img',
+                    '.image-container img'
                 ]
             },
             'snapdeal': {
@@ -198,33 +252,43 @@ class ModernScraper:
                     'h1[itemprop="name"]',
                     '.pdp-product-name',
                     '.product-title',
-                    '[data-testid="product-title"]'
+                    '[data-testid="product-title"]',
+                    'h1.pdp-e-i-head',
+                    '.product-title h1'
                 ],
                 'price': [
                     '.payBlkBig',
                     '.product-price',
                     '.price-current',
-                    '[data-testid="selling-price"]'
+                    '[data-testid="selling-price"]',
+                    'span.payBlkBig',
+                    '.price-info .payBlkBig'
                 ],
                 'brand': [
                     '.brand-name',
-                    '[data-testid="brand-name"]'
+                    '[data-testid="brand-name"]',
+                    '.product-brand',
+                    '.brand-info span'
                 ],
                 'images': [
                     '.product-image img',
-                    '.pdp-image img'
+                    '.pdp-image img',
+                    '.image-container img'
                 ]
             },
             'wishlink': {
                 'title': [
                     '.product-title',
                     'h1.title',
-                    '.product-name'
+                    '.product-name',
+                    'h1.product-title',
+                    '.title h1'
                 ],
                 'price': [
                     '.product-price',
                     '.price-current',
-                    '.price'
+                    '.price',
+                    '.price-info span'
                 ]
             }
         }
@@ -232,11 +296,14 @@ class ModernScraper:
     def scrape_product(self, url: str, platform: str = None, advanced_mode: bool = False) -> Optional[Dict]:
         """Main scraping method with intelligent platform detection and fallback strategies."""
         try:
+            log_extraction_attempt(url, platform or 'unknown', 'modern_scraper')
+            
             # Step 1: Resolve URL and detect platform
             if not platform:
                 url_info = url_resolver.resolve_url(url)
                 if url_info['error']:
                     logger.error(f"URL resolution failed: {url_info['error']}")
+                    log_extraction_failure(url, 'unknown', f"URL resolution failed: {url_info['error']}")
                     return None
                 
                 url = url_info['final_url']
@@ -244,6 +311,7 @@ class ModernScraper:
             
             if not platform:
                 logger.error(f"Could not detect platform for URL: {url}")
+                log_extraction_failure(url, 'unknown', "Could not detect platform")
                 return None
             
             logger.info(f"Scraping {platform} product: {url}")
@@ -251,6 +319,7 @@ class ModernScraper:
             # Step 2: Get page content with retry logic
             soup = self._get_page_content(url)
             if not soup:
+                log_extraction_failure(url, platform, "Failed to fetch page content")
                 return None
             
             # Step 3: Extract product data
@@ -260,22 +329,26 @@ class ModernScraper:
             if product_data and self._validate_product_data(product_data):
                 product_data = self._enhance_product_data(product_data, soup, platform)
                 logger.info(f"Successfully scraped product: {product_data.get('title', 'Unknown')}")
+                log_extraction_success(url, platform, product_data)
                 return product_data
             else:
                 logger.warning(f"Failed to extract valid product data from {url}")
+                log_extraction_failure(url, platform, "Failed to extract valid product data")
                 return None
                 
         except Exception as e:
             logger.error(f"Error scraping product {url}: {str(e)}")
+            log_extraction_failure(url, platform or 'unknown', f"Exception: {str(e)}", e)
             return None
 
     def _get_page_content(self, url: str) -> Optional[BeautifulSoup]:
         """Get page content with multiple retry strategies."""
         user_agents = [
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
             'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         ]
         
         for attempt in range(MAX_RETRIES):
@@ -283,9 +356,25 @@ class ModernScraper:
                 # Rotate user agents
                 self.session.headers['User-Agent'] = user_agents[attempt % len(user_agents)]
                 
+                if 'amazon' in url.lower():
+                    self.session.headers.update({
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.5',
+                        'Accept-Encoding': 'gzip, deflate',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none'
+                    })
+                elif 'flipkart' in url.lower():
+                    self.session.headers.update({
+                        'X-User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                    })
+                
                 # Add random delay to avoid rate limiting
                 if attempt > 0:
-                    time.sleep(1 + attempt)
+                    time.sleep(2 + attempt)
                 
                 response = self.session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
                 
@@ -293,10 +382,11 @@ class ModernScraper:
                     return BeautifulSoup(response.content, 'html.parser')
                 elif response.status_code == 403:
                     logger.warning(f"Access forbidden (403) for {url}, trying different approach")
+                    self.session.headers['User-Agent'] = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
                     continue
                 elif response.status_code == 429:
                     logger.warning(f"Rate limited (429) for {url}, waiting longer")
-                    time.sleep(5)
+                    time.sleep(10 + attempt * 5)
                     continue
                 else:
                     logger.warning(f"HTTP {response.status_code} for {url}")
@@ -352,6 +442,23 @@ class ModernScraper:
                 product_data.update(microdata)
                 product_data['extraction_method'] = 'microdata'
         
+        if not product_data.get('title'):
+            og_title = soup.find('meta', property='og:title')
+            if og_title and og_title.get('content'):
+                product_data['title'] = clean_text(og_title['content'])
+                product_data['extraction_method'] = 'open_graph'
+        
+        if not product_data.get('title'):
+            generic_title_selectors = ['h1', '.product-title', '.title', '[data-testid*="title"]']
+            for selector in generic_title_selectors:
+                element = soup.select_one(selector)
+                if element:
+                    text = clean_text(element.get_text())
+                    if text and len(text) > 10:
+                        product_data['title'] = text
+                        product_data['extraction_method'] = 'generic_selectors'
+                        break
+        
         return product_data
 
     def _extract_with_fallback(self, soup: BeautifulSoup, selectors: List[str], field_type: str) -> Optional[str]:
@@ -366,10 +473,9 @@ class ModernScraper:
                 if element:
                     text = clean_text(element.get_text())
                     if text and len(text.strip()) > 0:
-                        # Additional validation based on field type
-                        if field_type == 'title' and len(text) > 10:
+                        if field_type == 'title' and len(text) > 5 and not text.lower().startswith('error'):
                             return text
-                        elif field_type == 'brand' and len(text) < 50:
+                        elif field_type == 'brand' and len(text) < 100 and not any(word in text.lower() for word in ['visit', 'store', 'shop', 'buy']):
                             return text
                         elif field_type not in ['title', 'brand']:
                             return text
@@ -387,10 +493,14 @@ class ModernScraper:
                 if element:
                     price_text = clean_text(element.get_text())
                     if price_text and any(char.isdigit() for char in price_text):
+                        # Remove common non-price text
+                        if any(word in price_text.lower() for word in ['free', 'shipping', 'delivery', 'emi', 'offer']):
+                            continue
+                        
                         # Clean and validate price
-                        price_match = re.search(r'[\d,]+(?:\.\d+)?', price_text)
+                        price_match = re.search(r'[₹$€£¥]?\s*[\d,]+(?:\.\d+)?', price_text)
                         if price_match:
-                            return price_text
+                            return price_text.strip()
             except Exception as e:
                 logger.debug(f"Price selector {selector} failed: {str(e)}")
                 continue
@@ -523,10 +633,16 @@ class ModernScraper:
         if not title or len(title) < 5:
             return False
         
+        title_lower = title.lower()
+        error_indicators = ['error', '404', 'not found', 'page not found', 'access denied', 'sorry']
+        if any(indicator in title_lower for indicator in error_indicators):
+            return False
+        
         # Should have price (unless it's a special case)
         price = product_data.get('price', '').strip()
         if not price:
             logger.warning("Product has no price information")
+            # Don't fail validation just for missing price, some products might not have visible prices
         
         return True
 
