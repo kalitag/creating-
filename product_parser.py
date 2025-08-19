@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Optional, List, Tuple
 from config import BRANDS
 from utils import clean_text, format_price_number
+from debug_framework import debug_tracker, DebugLevel
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,33 @@ class SmartProductParser:
             r'INR\s*(\d+(?:,\d+)*(?:\.\d+)?)',
             r'(\d+(?:,\d+)*(?:\.\d+)?)\s*(?:₹|Rs|INR)'
         ]
+        
+        self.response_templates = {
+            'standard': "{brand} {title} @{price} rs {url}",
+            'with_size': "{brand} {title} Size - {size} @{price} rs {url}",
+            'with_color': "{brand} {title} Color - {color} @{price} rs {url}",
+            'with_pack': "{brand} {title} ({pack}) @{price} rs {url}",
+            'minimal': "{title} @{price} rs {url}",
+            'no_price': "{brand} {title} {url}",
+            'error_fallback': "Product from {platform} {url}"
+        }
+        
+        self.quality_weights = {
+            'has_title': 40,
+            'has_price': 30,
+            'has_brand': 15,
+            'has_images': 10,
+            'title_length_good': 5
+        }
 
     def parse_product(self, raw_data: Dict) -> Optional[Dict]:
         """Parse raw scraped data into ReviewCheckk format."""
         try:
             if not raw_data or not raw_data.get('title'):
+                debug_tracker.log_event(
+                    DebugLevel.WARNING, 'parser', 'parse_failed',
+                    'No title in raw data', {'raw_data_keys': list(raw_data.keys()) if raw_data else []}
+                )
                 return None
             
             parsed_data = {
@@ -80,18 +103,39 @@ class SmartProductParser:
             category_info = self._detect_category(parsed_data['clean_title'])
             parsed_data.update(category_info)
             
-            # Step 5: Format final message
-            formatted_message = self._format_message(parsed_data)
+            quality_score = self._assess_quality(parsed_data)
+            parsed_data['quality_score'] = quality_score
+            
+            template_choice = self._select_template(parsed_data)
+            parsed_data['template_used'] = template_choice
+            
+            # Step 5: Format final message using smart template
+            formatted_message = self._format_message_smart(parsed_data, template_choice)
             parsed_data['formatted_message'] = formatted_message
             
             # Step 6: Generate wishlink-style URL (if needed)
             if parsed_data.get('price_numeric'):
                 parsed_data['wishlink_url'] = self._generate_wishlink_style(parsed_data)
             
-            logger.info(f"Successfully parsed product: {parsed_data.get('display_title', 'Unknown')}")
+            debug_tracker.log_event(
+                DebugLevel.INFO, 'parser', 'parse_success',
+                f'Successfully parsed: {parsed_data.get("display_title", "Unknown")}',
+                {
+                    'quality_score': quality_score,
+                    'template_used': template_choice,
+                    'has_price': bool(parsed_data.get('price_numeric')),
+                    'has_brand': bool(parsed_data.get('brand'))
+                }
+            )
+            
             return parsed_data
             
         except Exception as e:
+            debug_tracker.log_event(
+                DebugLevel.ERROR, 'parser', 'parse_error',
+                f'Error parsing product data: {str(e)}',
+                {'raw_data': raw_data}
+            )
             logger.error(f"Error parsing product data: {str(e)}")
             return None
 
@@ -305,45 +349,64 @@ class SmartProductParser:
             logger.debug(f"Error detecting category: {str(e)}")
             return {'category': None, 'is_clothing': False, 'is_beauty': False, 'is_accessory': False}
 
-    def _format_message(self, data: Dict) -> str:
-        """Format product data into ReviewCheckk style message."""
+    def _format_message_smart(self, data: Dict, template: str) -> str:
+        """Format message using selected template with smart fallbacks."""
         try:
-            # Build the display title
-            title_parts = []
+            # Prepare template variables
+            variables = {
+                'brand': data.get('brand', '').strip(),
+                'title': data.get('clean_title', '').strip(),
+                'price': int(data.get('price_numeric', 0)) if data.get('price_numeric') else '',
+                'url': data.get('url', ''),
+                'platform': data.get('platform', 'unknown'),
+                'size': ', '.join(data.get('sizes', [])[:2]) if data.get('sizes') else '',
+                'color': data.get('color', ''),
+                'pack': data.get('quantity', '')
+            }
             
-            # Add brand if available
-            if data.get('brand'):
-                title_parts.append(data['brand'])
+            # Clean up variables - remove empty ones for cleaner output
+            clean_variables = {}
+            for key, value in variables.items():
+                if value and str(value).strip():
+                    clean_variables[key] = str(value).strip()
             
-            # Add main product name
-            clean_title = data.get('clean_title', '').strip()
-            if clean_title:
-                title_parts.append(clean_title)
+            # Get template
+            template_str = self.response_templates.get(template, self.response_templates['error_fallback'])
             
-            # Add quantity if it's a pack
-            if data.get('quantity'):
-                title_parts.append(f"({data['quantity']})")
-            
-            # Combine title parts
-            display_title = ' '.join(title_parts)
-            
-            # Add price
-            if data.get('formatted_price'):
-                display_title += f" {data['formatted_price']}"
-            
-            # Ensure title is not too long (max 8-10 words)
-            words = display_title.split()
-            if len(words) > 10:
-                display_title = ' '.join(words[:10])
-            
-            # Store display title for reference
-            data['display_title'] = display_title
-            
-            return display_title
-            
+            # Smart formatting with fallbacks
+            try:
+                # Try to format with all variables
+                formatted = template_str.format(**clean_variables)
+                
+                # Clean up extra spaces and formatting issues
+                formatted = re.sub(r'\s+', ' ', formatted)
+                formatted = re.sub(r'\s+@\s*rs', ' @0 rs', formatted)  # Handle missing price
+                formatted = formatted.replace(' @0 rs', '')  # Remove zero price
+                formatted = formatted.strip()
+                
+                # Ensure minimum quality
+                if len(formatted) < 10 or not any(char.isalnum() for char in formatted):
+                    raise ValueError("Formatted message too short or invalid")
+                
+                return formatted
+                
+            except (KeyError, ValueError) as e:
+                # Fallback to minimal template
+                logger.warning(f"Template formatting failed: {e}, using fallback")
+                
+                title = clean_variables.get('title', 'Product')
+                url = clean_variables.get('url', '')
+                price = clean_variables.get('price', '')
+                
+                if price:
+                    return f"{title} @{price} rs {url}".strip()
+                else:
+                    return f"{title} {url}".strip()
+                    
         except Exception as e:
-            logger.error(f"Error formatting message: {str(e)}")
-            return data.get('clean_title', 'Product')
+            logger.error(f"Error in smart formatting: {str(e)}")
+            # Ultimate fallback
+            return f"Product from {data.get('platform', 'unknown')} {data.get('url', '')}"
 
     def _generate_wishlink_style(self, data: Dict) -> str:
         """Generate a wishlink-style URL format."""
@@ -383,40 +446,108 @@ class SmartProductParser:
             return text.title()
 
     def format_for_telegram(self, parsed_data: Dict) -> str:
-        """Format parsed data for Telegram message."""
+        """Format parsed data for Telegram message with smart enhancements."""
         try:
             if not parsed_data:
                 return "❌ Unable to extract product info."
             
-            message = parsed_data.get('formatted_message', '')
+            base_message = parsed_data.get('formatted_message', '')
             
-            # Add wishlink URL if available
-            if parsed_data.get('url'):
-                # For now, use original URL - in production, convert to wishlink
-                message += f" {parsed_data['url']}"
+            # Add quality indicator for debugging (remove in production)
+            quality_score = parsed_data.get('quality_score', 0)
             
-            # Add additional info if needed
-            additional_info = []
+            # Smart enhancement based on quality and platform
+            if quality_score >= 70:
+                # High quality - add extra details
+                enhancements = []
+                
+                if parsed_data.get('category') == 'clothing' and parsed_data.get('sizes'):
+                    sizes_str = ', '.join(parsed_data['sizes'][:2])
+                    if 'Size -' not in base_message:
+                        enhancements.append(f"Size - {sizes_str}")
+                
+                if parsed_data.get('color') and 'Color -' not in base_message:
+                    enhancements.append(f"Color - {parsed_data['color']}")
+                
+                # Add pincode for low-price items (ReviewCheckk style)
+                if parsed_data.get('price_numeric') and parsed_data['price_numeric'] < 500:
+                    enhancements.append("Pin - 110001")
+                
+                if enhancements:
+                    base_message += f" {' '.join(enhancements)}"
             
-            if parsed_data.get('sizes'):
-                sizes_str = ', '.join(parsed_data['sizes'][:3])
-                additional_info.append(f"Size - {sizes_str}")
+            elif quality_score < 50:
+                # Low quality - add platform indicator
+                platform = parsed_data.get('platform', 'unknown').title()
+                if platform not in base_message:
+                    base_message = f"[{platform}] {base_message}"
             
-            if parsed_data.get('color'):
-                additional_info.append(f"Color - {parsed_data['color']}")
+            # Final cleanup
+            base_message = re.sub(r'\s+', ' ', base_message).strip()
             
-            # Add pincode placeholder (common in ReviewCheckk)
-            if parsed_data.get('price_numeric') and parsed_data['price_numeric'] < 500:
-                additional_info.append("Pin - 110001")
+            # Ensure message is not empty
+            if not base_message or len(base_message) < 5:
+                return f"Product from {parsed_data.get('platform', 'unknown')} {parsed_data.get('url', '')}"
             
-            if additional_info:
-                message += f" {' '.join(additional_info)}"
-            
-            return message
+            return base_message
             
         except Exception as e:
             logger.error(f"Error formatting for Telegram: {str(e)}")
+            debug_tracker.log_event(
+                DebugLevel.ERROR, 'parser', 'telegram_format_error',
+                f'Error formatting for Telegram: {str(e)}',
+                {'parsed_data': parsed_data}
+            )
             return "❌ Unable to format product info."
+
+    def _assess_quality(self, data: Dict) -> int:
+        """Assess the quality of extracted data."""
+        score = 0
+        
+        if data.get('clean_title') and len(data['clean_title']) > 5:
+            score += self.quality_weights['has_title']
+            
+            # Bonus for good title length (not too short, not too long)
+            title_len = len(data['clean_title'].split())
+            if 3 <= title_len <= 8:
+                score += self.quality_weights['title_length_good']
+        
+        if data.get('price_numeric'):
+            score += self.quality_weights['has_price']
+        
+        if data.get('brand'):
+            score += self.quality_weights['has_brand']
+        
+        if data.get('images'):
+            score += self.quality_weights['has_images']
+        
+        return score
+
+    def _select_template(self, data: Dict) -> str:
+        """Select the best template based on available data."""
+        # High quality data - use detailed template
+        if data.get('quality_score', 0) >= 80:
+            if data.get('sizes') and data.get('price_numeric'):
+                return 'with_size'
+            elif data.get('color') and data.get('price_numeric'):
+                return 'with_color'
+            elif data.get('pack_size') and data.get('pack_size') > 1:
+                return 'with_pack'
+            elif data.get('brand') and data.get('price_numeric'):
+                return 'standard'
+        
+        # Medium quality - use simpler templates
+        if data.get('price_numeric'):
+            if data.get('brand'):
+                return 'standard'
+            else:
+                return 'minimal'
+        
+        # Low quality - fallback templates
+        if data.get('brand'):
+            return 'no_price'
+        
+        return 'error_fallback'
 
 # Global parser instance
 smart_parser = SmartProductParser()
